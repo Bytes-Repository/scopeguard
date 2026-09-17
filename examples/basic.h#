@@ -1,0 +1,45 @@
+mod scopeguard
+
+fn parse_config(raw: string) -> int? is
+    if raw == "" is
+        return nil
+    end
+    return string_len(raw)
+end
+
+fn demo_defer() is
+    write("── defer: zawsze wykonywane sprzątanie ──")
+
+    let len: any = scopeguard::defer(
+        fn() -> any is
+            write("  body: liczę długość...")
+            return string_len("Hello, scopeguard!")
+        end,
+        fn() is
+            write("  cleanup: (zawsze) zwalniam zasób")
+        end
+    )
+    write("  wynik: " + to_string(len))
+end
+
+fn demo_on_success_and_error() is
+    write("── defer_on_success / defer_on_error ──")
+
+    let ok: int? = scopeguard::defer_on_success<int>(
+        fn() -> int? is parse_config("some-config") end,
+        fn() is write("  commit: konfiguracja poprawna, zatwierdzam zmiany") end
+    )
+    write("  parse('some-config') = " + to_string(ok))
+
+    let bad: int? = scopeguard::defer_on_error<int>(
+        fn() -> int? is parse_config("") end,
+        fn() is write("  rollback: cofam częściowe zmiany") end
+    )
+    write("  parse('') = " + to_string(bad))
+end
+
+fn main() is
+    demo_defer()
+    write("")
+    demo_on_success_and_error()
+end
