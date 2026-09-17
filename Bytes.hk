@@ -1,1 +1,16 @@
+[package]
+-> name        => scopeguard
+-> version     => 0.1.0
+-> description => Odpowiednik rustowej biblioteki `scopeguard` dla H# — gwarantowane uruchomienie kodu sprzątającego przy wyjściu ze scope'u (Always / OnSuccess / OnError), plus prawdziwy system extern static [c] / extern static [rust].
+-> author      => Bytes Developers
+-> license     => MIT
 
+[build]
+-> lang    => h#
+-> entry   => src/scopeguard.h#
+-> output  => build/libscopeguard
+-> emit    => lib
+-> include => src
+
+[deps]
+-> libc => dynamic
