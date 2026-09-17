@@ -1,0 +1,23 @@
+mod scopeguard
+
+fn main() is
+    write("── extern static [rust, \"scopeguard_native\"] ──")
+    write("  native ABI version: " + to_string(scopeguard::native_version()))
+    write("  next_id()          : " + to_string(scopeguard::next_id()))
+    write("  next_id()          : " + to_string(scopeguard::next_id()))
+    write("  next_id()          : " + to_string(scopeguard::next_id()))
+
+    write("")
+    write("── extern static [c] ──")
+    write("  pid procesu: " + to_string(scopeguard::pid()))
+
+    write("")
+    write("── defer_exit: cleanup gwarantowany tuż przed prawdziwym _exit(2) ──")
+    scopeguard::defer_exit(
+        fn() is
+            write("  cleanup: zapisuję stan przed zamknięciem procesu")
+        end,
+        0
+    )
+    write("  (ta linia nigdy się nie wykona — proces już nie żyje)")
+end
