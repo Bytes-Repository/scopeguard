@@ -1,0 +1,164 @@
+mod native
+
+;; ════════════════════════════════════════════════════════════════════════
+;; (A) Poziom zalecany: gwarantowane wykonanie przez domknięcie
+;; ════════════════════════════════════════════════════════════════════════
+
+;; Odpowiednik `Strategy::Always` z Rusta.
+;;
+;; Uruchamia `body`, POTEM zawsze `cleanup` — niezależnie od tego, którym
+;; `return`em (czy w ogóle którym) `body` się zakończyło — i zwraca wynik
+;; `body`. `cleanup` NIE dostaje wyniku `body` (na wzór `defer` z Go) —
+;; jeśli potrzebujesz sprzątać na podstawie wartości, użyj `ValueGuard`
+;; poniżej albo domknij wartość w `cleanup` przez przechwycenie (odczyt,
+;; nie mutacja — patrz "Known Limitations" kompilatora H#).
+;;
+;;   let content: string = scopeguard::defer(
+;;       fn() -> any is
+;;           let f: any = fs_open(path)
+;;           return fs_read_all(f)
+;;       end,
+;;       fn() is fs_close(f) end   ;; f przechwycone tylko do odczytu
+;;   )
+pub fn defer(body: fn() -> any, cleanup: fn()) -> any is
+    let result: any = body()
+    cleanup()
+    return result
+end
+
+;; Wariant bez wartości zwracanej — dla bloków, którym zależy tylko na
+;; efekcie ubocznym `body` (np. sekwencja operacji I/O).
+pub fn defer_unit(body: fn(), cleanup: fn()) is
+    body()
+    cleanup()
+end
+
+;; Odpowiednik `guard_on_success` z Rusta.
+;;
+;; H# nie ma `Result<T, E>` — konwencja stdlib to `T?` (nilowalny typ,
+;; `nil` = błąd/brak wartości, patrz operator `?` i np. `fs::read` w
+;; README kompilatora). `cleanup` odpala się WYŁĄCZNIE, gdy `body` zwróci
+;; wartość różną od `nil` — czyli dokładnie wtedy, gdy operacja się udała.
+pub fn defer_on_success<T>(body: fn() -> T?, cleanup: fn()) -> T? is
+    let result: T? = body()
+    if result != nil is
+        cleanup()
+    end
+    return result
+end
+
+;; Odpowiednik najbliższy `guard_on_unwind` z Rusta — ponieważ H# nie ma
+;; odwijania stosu (panika = `_exit`/abort całego procesu, patrz nagłówek
+;; pliku), nie da się tu wykryć "paniki w trakcie `body`". To, co da się
+;; wykryć i co realnie odpowiada duchowi `OnUnwind` ("posprzątaj, gdy coś
+;; poszło źle"), to `T? == nil` — czyli błąd zgłoszony przez konwencję
+;; zwracanej wartości. `cleanup` odpala się WYŁĄCZNIE, gdy `body` zwróci
+;; `nil`.
+pub fn defer_on_error<T>(body: fn() -> T?, cleanup: fn()) -> T? is
+    let result: T? = body()
+    if result == nil is
+        cleanup()
+    end
+    return result
+end
+
+;; ════════════════════════════════════════════════════════════════════════
+;; (B) Poziom ręczny: Guard / ValueGuard — jawny odpowiednik ScopeGuard
+;; ════════════════════════════════════════════════════════════════════════
+
+;; Prosty, bezwartościowy strażnik — tylko flaga "uzbrojony/rozbrojony".
+;; Odpowiednik `scopeguard::guard((), |_| cleanup())` z Rusta, tyle że
+;; TY musisz wywołać `release` na każdej ścieżce wyjścia (patrz nagłówek).
+struct Guard is
+    pub armed: bool
+end
+
+;; Tworzy nowy, uzbrojony strażnik.
+pub fn make_guard() -> Guard is
+    return Guard { armed: true }
+end
+
+;; Odpowiednik `ScopeGuard::dismiss()` — rozbraja strażnika BEZ
+;; uruchamiania sprzątania (bo np. operacja się udała i już nic nie trzeba
+;; czyścić). Zwraca nową, rozbrojoną kopię (H# struct to typ wartościowy —
+;; patrz `sync::unlock`/`sync::lock` w stdlib, ten sam styl).
+pub fn dismiss(g: Guard) -> Guard is
+    return Guard { armed: false }
+end
+
+;; Odpowiednik miejsca, w którym w Rust odpaliłby się `Drop::drop`.
+;; Jeśli `g` jest wciąż uzbrojony, uruchamia `cleanup` — inaczej nic nie
+;; robi (bo ktoś już wcześniej wywołał `dismiss`, albo ten sam `g` był już
+;; raz zwolniony). Zawsze zwraca rozbrojoną kopię, więc podwójne
+;; wywołanie `release` na tym samym uchwycie jest bezpieczne (idempotentne).
+pub fn release(g: Guard, cleanup: fn()) -> Guard is
+    if g.armed is
+        cleanup()
+    end
+    return Guard { armed: false }
+end
+
+pub fn is_armed(g: Guard) -> bool is
+    return g.armed
+end
+
+;; ── ValueGuard — jak wyżej, ale niesie ze sobą chronioną wartość ──────────
+;;
+;; Odpowiednik `scopeguard::guard(value, f)` z Rusta. `value` jest typu
+;; `any` (tak samo jak w reszcie stdlib H# dla generycznych kontenerów —
+;; patrz `std -> iter`, `std -> sort`), bo funkcje H# nie mogą być
+;; przechowywane jako pole struktury (brak precedensu w kompilatorze/
+;; stdlib dla `pub f: fn(...)` w polu struktury) — dlatego `cleanup`
+;; zawsze podajesz jawnie przy `release`, tak jak przy zwykłym `Guard`.
+struct ValueGuard is
+    pub value: any
+    pub armed: bool
+end
+
+pub fn guard(value: any) -> ValueGuard is
+    return ValueGuard { value: value, armed: true }
+end
+
+pub fn dismiss_value(g: ValueGuard) -> ValueGuard is
+    return ValueGuard { value: g.value, armed: false }
+end
+
+;; Jak `release`, ale `cleanup` dostaje niesioną wartość (`g.value`) —
+;; dokładnie tak, jak rustowe `|v| { ... }` w `scopeguard::guard(v, |v| ...)`.
+pub fn release_value(g: ValueGuard, cleanup: fn(any)) -> ValueGuard is
+    if g.armed is
+        cleanup(g.value)
+    end
+    return ValueGuard { value: g.value, armed: false }
+end
+
+pub fn value_of(g: ValueGuard) -> any is
+    return g.value
+end
+
+;; ════════════════════════════════════════════════════════════════════════
+;; (C) Reeksport warstwy natywnej (extern static [c] / [rust]) — patrz
+;;     native.h# po pełne komentarze. Trzymane tu jako `pub fn`, żeby
+;;     `use "... -> scopeguard" from "sg"` dawało dostęp do WSZYSTKIEGO
+;;     jedną ścieżką, bez konieczności osobnego `mod native` u konsumenta.
+;; ════════════════════════════════════════════════════════════════════════
+
+pub fn next_id() -> int is
+    return native::next_guard_id()
+end
+
+pub fn native_version() -> int is
+    return native::native_abi_version()
+end
+
+pub fn pid() -> int is
+    return native::current_pid()
+end
+
+;; Jak `defer_unit`, ale kończy proces PRAWDZIWYM libc `_exit` zaraz po
+;; `cleanup` — patrz native.h#. Dla sytuacji "muszę już teraz ubić proces,
+;; ale nie mogę pominąć sprzątania" (odpowiednik ostrzeżenia z dokumentacji
+;; Rusta o `std::process::exit` pomijającym `Drop`).
+pub fn defer_exit(cleanup: fn(), code: int) is
+    native::emergency_exit(cleanup, code)
+end
