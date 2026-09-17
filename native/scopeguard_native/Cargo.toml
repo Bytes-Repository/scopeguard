@@ -1,0 +1,17 @@
+[package]
+name = "scopeguard_native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Minimalna, prawdziwa natywna warstwa dla H# `extern static [rust, \"scopeguard_native\"]` — atomowy licznik id strażników. Zero logiki scopeguarda po tej stronie; ta żyje w 100% w src/scopeguard.h#."
+
+# staticlib -> liblibscopeguard_native.a, linkowana przez `h#` z
+# `--whole-archive` (patrz kompilator H#, source-code/compiler/src/
+# ffi_linker.rs: `ExternLang::Rust, ExternLinkKind::Static`).
+[lib]
+name = "scopeguard_native"
+crate-type = ["staticlib"]
+
+[profile.release]
+panic = "abort"
+lto = true
