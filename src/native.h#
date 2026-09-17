@@ -1,1 +1,47 @@
+extern static [c] is
+    fn _exit(code: int)
+    fn getpid() -> int
+end
 
+;; ── native/scopeguard_native — prawdziwy staticlib Rust ───────────────────
+;; Wymaga zbudowania raz: `cargo build --release` w native/scopeguard_native
+;; i umieszczenia `libscopeguard_native.a` tam, gdzie linker H# go znajdzie
+;; (patrz README.md, sekcja "Warstwa natywna"). Jeśli plik .a nie istnieje
+;; przy linkowaniu, kompilator H# zgłosi to jako normalny błąd linkera —
+;; tak samo jak dla brakującej biblioteki C — nic tu nie jest udawane.
+extern static [rust, "scopeguard_native"] is
+    fn sg_next_id() -> int
+    fn sg_native_abi_version() -> int
+end
+
+;; ── Publiczne wrappery (nazwy w stylu reszty stdlib H#) ───────────────────
+
+;; Kolejny, globalnie unikalny (w ramach procesu) identyfikator strażnika —
+;; przydatny do logowania/śledzenia, kiedy w jednym miejscu żyje wiele
+;; aktywnych `Guard`/`ValueGuard`. Prawdziwy atomik po stronie Rust, nie
+;; licznik pod locakiem po stronie H#.
+pub fn next_guard_id() -> int is
+    return sg_next_id()
+end
+
+;; Wersja ABI natywnej biblioteki — pozwala w runtime sprawdzić, czy
+;; zlinkowany `libscopeguard_native.a` jest kompatybilny z tym, czego
+;; oczekuje ta wersja scopeguard.h#.
+pub fn native_abi_version() -> int is
+    return sg_native_abi_version()
+end
+
+;; Uruchamia `cleanup`, a następnie kończy proces PRAWDZIWYM `_exit(2)`
+;; z libc. To jest odpowiednik sytuacji, w której w Rust ktoś wywołuje
+;; `std::process::exit` obok `scopeguard` — tam trzeba pamiętać, że `exit`
+;; pomija Drop; tutaj `emergency_exit` explicite gwarantuje, że `cleanup`
+;; zdąży się wykonać PRZED wyjściem, zamiast zostać pominięte.
+pub fn emergency_exit(cleanup: fn(), code: int) is
+    cleanup()
+    _exit(code)
+end
+
+;; PID bieżącego procesu — realny `getpid()`, do logów/diagnostyki.
+pub fn current_pid() -> int is
+    return getpid()
+end
