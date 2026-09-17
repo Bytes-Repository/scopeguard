@@ -1,0 +1,33 @@
+use "std -> io -> file" from "file"
+
+mod scopeguard
+
+fn process_file(path: string, should_fail: bool) -> bool is
+    let fd: int = file::open_write(path)
+    let mut g: scopeguard::ValueGuard = scopeguard::guard(fd)
+
+    if should_fail is
+        write("  coś poszło nie tak — zwalniam fd przez ValueGuard i wychodzę")
+        g = scopeguard::release_value(g, fn(handle: any) is
+            file::close_fd(handle)
+        end)
+        return false
+    end
+
+    file::write_fd(fd, "dane\n")
+
+    write("  sukces — zwalniam fd przez ValueGuard")
+    g = scopeguard::release_value(g, fn(handle: any) is
+        file::close_fd(handle)
+    end)
+    return true
+end
+
+fn main() is
+    write("── ValueGuard: fd zawsze zamykany, niezależnie od ścieżki wyjścia ──")
+    let r1: bool = process_file("/tmp/scopeguard_demo.txt", false)
+    write("  wynik (sukces): " + to_string(r1))
+
+    let r2: bool = process_file("/tmp/scopeguard_demo.txt", true)
+    write("  wynik (błąd)  : " + to_string(r2))
+end
