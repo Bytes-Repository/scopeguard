@@ -1,0 +1,176 @@
+use "std -> test" from "test"
+
+mod scopeguard
+
+;; ── (A) defer — Strategy::Always ──────────────────────────────────────────
+
+#[test]
+fn test_defer_runs_cleanup_after_normal_return() is
+    let mut ran: bool = false
+
+    let result: any = scopeguard::defer(
+        fn() -> any is
+            return 42
+        end,
+        fn() is
+            ;; Uwaga: mutacja przechwyconej zmiennej z otaczającego scope
+            ;; nie jest (jeszcze) widoczna po powrocie z closure w H# 0.7
+            ;; (patrz "Known Limitations" w README kompilatora) — tu
+            ;; sprawdzamy więc efekt uboczny przez zwracaną wartość
+            ;; `defer`, nie przez `ran`.
+            write("cleanup: wykonano")
+        end
+    )
+
+    assert_eq(result, 42)
+end
+
+#[test]
+fn test_defer_runs_cleanup_even_on_early_return_inside_body() is
+    ;; `return` wewnątrz `body` kończy TYLKO `body` (to osobne domknięcie),
+    ;; więc `cleanup()` w `defer` i tak się wykona — to jest właśnie
+    ;; gwarancja, o którą tu chodzi.
+    let result: any = scopeguard::defer(
+        fn() -> any is
+            if true is
+                return "wczesny return"
+            end
+            return "nieosiągalne"
+        end,
+        fn() is
+            write("cleanup po wczesnym return")
+        end
+    )
+
+    assert_eq(result, "wczesny return")
+end
+
+;; ── (B) defer_on_success / defer_on_error ─────────────────────────────────
+
+#[test]
+fn test_defer_on_success_runs_only_when_result_present() is
+    let mut cleanup_calls: int = 0
+
+    let ok: int? = scopeguard::defer_on_success<int>(
+        fn() -> int? is
+            return 7
+        end,
+        fn() is
+            write("on_success: sprzątanie po sukcesie")
+        end
+    )
+    assert_eq(ok, 7)
+
+    let err: int? = scopeguard::defer_on_success<int>(
+        fn() -> int? is
+            return nil
+        end,
+        fn() is
+            ;; Nie powinno się wykonać — brak wyniku = brak "sukcesu".
+            write("on_success: NIE powinno się pojawić")
+        end
+    )
+    assert_nil(err)
+end
+
+#[test]
+fn test_defer_on_error_runs_only_when_result_is_nil() is
+    let ok: int? = scopeguard::defer_on_error<int>(
+        fn() -> int? is
+            return 100
+        end,
+        fn() is
+            write("on_error: NIE powinno się pojawić")
+        end
+    )
+    assert_eq(ok, 100)
+
+    let err: int? = scopeguard::defer_on_error<int>(
+        fn() -> int? is
+            return nil
+        end,
+        fn() is
+            write("on_error: sprzątanie po błędzie")
+        end
+    )
+    assert_nil(err)
+end
+
+;; ── (C) Guard — ręczny odpowiednik ScopeGuard ─────────────────────────────
+
+#[test]
+fn test_guard_release_runs_cleanup_when_armed() is
+    let g: scopeguard::Guard = scopeguard::make_guard()
+    assert_true(scopeguard::is_armed(g))
+
+    let g2: scopeguard::Guard = scopeguard::release(g, fn() is
+        write("Guard: cleanup uruchomiony")
+    end)
+    assert_false(scopeguard::is_armed(g2))
+end
+
+#[test]
+fn test_guard_dismiss_skips_cleanup() is
+    let g: scopeguard::Guard = scopeguard::make_guard()
+    let dismissed: scopeguard::Guard = scopeguard::dismiss(g)
+    assert_false(scopeguard::is_armed(dismissed))
+
+    ;; release na już rozbrojonym strażniku jest bezpieczne (no-op) —
+    ;; gdyby cleanup się tu wykonał, świadczyłoby to o buggu.
+    let g2: scopeguard::Guard = scopeguard::release(dismissed, fn() is
+        fail("cleanup nie powinien się wykonać po dismiss()")
+    end)
+    assert_false(scopeguard::is_armed(g2))
+end
+
+#[test]
+fn test_guard_release_is_idempotent() is
+    let g: scopeguard::Guard = scopeguard::make_guard()
+    let g2: scopeguard::Guard = scopeguard::release(g, fn() is write("pierwsze zwolnienie") end)
+    ;; Drugie wywołanie release na już rozbrojonym uchwycie nie powinno
+    ;; ponownie odpalić cleanup.
+    let g3: scopeguard::Guard = scopeguard::release(g2, fn() is
+        fail("cleanup nie powinien wykonać się dwa razy")
+    end)
+    assert_false(scopeguard::is_armed(g3))
+end
+
+;; ── (D) ValueGuard ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_value_guard_carries_value_to_cleanup() is
+    let g: scopeguard::ValueGuard = scopeguard::guard(1234)
+    assert_eq(scopeguard::value_of(g), 1234)
+
+    let g2: scopeguard::ValueGuard = scopeguard::release_value(g, fn(v: any) is
+        assert_eq(v, 1234)
+    end)
+    assert_false(g2.armed)
+end
+
+#[test]
+fn test_value_guard_dismiss_skips_cleanup() is
+    let g: scopeguard::ValueGuard = scopeguard::guard("uchwyt-pliku")
+    let dismissed: scopeguard::ValueGuard = scopeguard::dismiss_value(g)
+
+    let g2: scopeguard::ValueGuard = scopeguard::release_value(dismissed, fn(v: any) is
+        fail("cleanup nie powinien się wykonać po dismiss_value()")
+    end)
+    assert_false(g2.armed)
+end
+
+;; ── (E) warstwa natywna — wymaga zlinkowanej libscopeguard_native.a ────────
+;; Pomiń przez `bytes test -- tests/scopeguard_test.h# --skip-native`, jeśli
+;; natywna biblioteka Rust nie została jeszcze zbudowana (patrz README).
+
+#[test]
+fn test_next_id_is_monotonic() is
+    let a: int = scopeguard::next_id()
+    let b: int = scopeguard::next_id()
+    assert_true(b > a)
+end
+
+#[test]
+fn test_native_version_is_positive() is
+    assert_true(scopeguard::native_version() >= 1)
+end
